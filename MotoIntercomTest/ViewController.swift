@@ -24,10 +24,10 @@ class ViewController: UIViewController {
     var localInputFormat: AVAudioFormat?
     
     var isRecording = false
-//    var peerAudioEngine: AVAudioEngine = AVAudioEngine()
-//    var peerAudioPlayer: AVAudioPlayerNode = AVAudioPlayerNode()
-//    var peerInput: AVAudioInputNode?
-//    var peerInputFormat: AVAudioFormat?
+    var peerAudioEngine: AVAudioEngine = AVAudioEngine()
+    var peerAudioPlayer: AVAudioPlayerNode = AVAudioPlayerNode()
+    var peerInput: AVAudioInputNode?
+    var peerInputFormat: AVAudioFormat?
     
     
     @IBOutlet weak var startButton: UIButton!
@@ -72,20 +72,23 @@ class ViewController: UIViewController {
         // Setting up audio engine for local recording and sounds
         self.localInput = self.localAudioEngine.inputNode
         self.localAudioEngine.attach(self.localAudioPlayer)
+        
 //        self.localInputFormat = self.localInput?.inputFormat(forBus: 0)
-        self.localInputFormat = AVAudioFormat.init(commonFormat: AVAudioCommonFormat.pcmFormatFloat32, sampleRate: 44100, channels: 1, interleaved: false)
+        
+        self.localInputFormat = AVAudioFormat.init(commonFormat: .pcmFormatFloat32, sampleRate: 44100, channels: 1, interleaved: false)
         self.localAudioEngine.connect(self.localAudioPlayer, to: self.localAudioEngine.mainMixerNode, format: self.localInputFormat)
         
         print("\(#file) > \(#function) > localInputFormat = \(self.localInputFormat.debugDescription)")
         
-//        self.audioPlayerQueue.async {
-//            self.peerInput = self.peerAudioEngine.inputNode
-//            self.peerAudioEngine.attach(self.peerAudioPlayer)
+        self.audioPlayerQueue.async {
+            self.peerInput = self.peerAudioEngine.inputNode
+            self.peerAudioEngine.attach(self.peerAudioPlayer)
 //            self.peerInputFormat = self.peerInput?.inputFormat(forBus: 1)
-//            self.peerAudioEngine.connect(self.peerAudioPlayer, to: self.peerAudioEngine.mainMixerNode, format: self.peerInputFormat)
-//            
-//            print("\(#file) > \(#function) > peerInputFormat = \(self.peerInputFormat.debugDescription)")
-//        }
+            self.peerInputFormat = AVAudioFormat.init(commonFormat: .pcmFormatFloat32, sampleRate: 44100, channels: 1, interleaved: false)
+            self.peerAudioEngine.connect(self.peerAudioPlayer, to: self.peerAudioEngine.mainMixerNode, format: self.peerInputFormat)
+            
+            print("\(#file) > \(#function) > peerInputFormat = \(self.peerInputFormat.debugDescription)")
+        }
         print("\(#file) > \(#function) > Exit")
     }
     
@@ -100,19 +103,18 @@ class ViewController: UIViewController {
             self.localPlayerQueue.async {
                 self.localAudioPlayer.scheduleBuffer(buffer)
             }
+
+//            let data = self.audioBufferToData(audioBuffer: buffer)
+            let data = self.toNSData(PCMBuffer: buffer)
             
-            
-            
-            let data = self.audioBufferToData(audioBuffer: buffer)
-            
-            let audioBuffer = self.dataToAudioBuffer(data: data)
-            print("\(#file) > \(#function) > audioBuffer channel count: \(audioBuffer.format.channelCount)")
-            print("\(#file) > \(#function) > localInput format channel count: \(self.localInputFormat?.channelCount)")
+//            let audioBuffer = self.dataToAudioBuffer(data: data)
+            let audioBuffer = self.toPCMBuffer(data: data)
             
             self.audioPlayerQueue.async {
-                self.localAudioPlayer.scheduleBuffer(audioBuffer)
-                if (!self.localAudioPlayer.isPlaying && self.localAudioEngine.isRunning) {
-                    self.localAudioPlayer.play()
+                self.peerAudioPlayer.scheduleBuffer(audioBuffer)
+                if (!self.peerAudioPlayer.isPlaying) {
+                    print("\(#file) > \(#function) > Starting peerAudioPlayer")
+                    self.peerAudioPlayer.play()
                 }
             }
         }
@@ -120,12 +122,14 @@ class ViewController: UIViewController {
         localPlayerQueue.sync {
             do {
                 try self.localAudioEngine.start()
+                try self.peerAudioEngine.start()
             }
             catch let error as NSError {
                 print("\(#file) > \(#function) > Error starting audio engine: \(error.localizedDescription)")
             }
             
-            self.localAudioPlayer.play()
+//            self.localAudioPlayer.play()
+            self.peerAudioPlayer.play()
             print("\(#file) > \(#function) > Audio is playing...")
         }
         
@@ -136,18 +140,34 @@ class ViewController: UIViewController {
     // Converts an audio buffer to Data
     func audioBufferToData(audioBuffer: AVAudioPCMBuffer) -> Data {
         
-        print("\(#file) > \(#function) > Entry")
-        
         let channelCount = 1
         let bufferLength = (audioBuffer.frameCapacity * audioBuffer.format.streamDescription.pointee.mBytesPerFrame)
         
-        let channels = UnsafeBufferPointer(start: audioBuffer.floatChannelData, count: Int(bufferLength))
+        let channels = UnsafeBufferPointer(start: audioBuffer.floatChannelData, count: channelCount)
         let data = Data(bytes: channels[0], count: Int(bufferLength))
         
-        print("\(#file) > \(#function) > Exit bufferLength \(bufferLength)")
+        print("\(#file) > \(#function) > Values: bufferLength: \(bufferLength), channels: \(channels), data: \(data)")
         return data
     }
     
+    // Converts Data to an audio buffer
+    func dataToAudioBuffer(data: Data) -> AVAudioPCMBuffer {
+        let audioFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 44100, channels: 1, interleaved: false)
+        let audioBuffer = AVAudioPCMBuffer(pcmFormat: audioFormat, frameCapacity: UInt32(data.count)/2)
+        audioBuffer.frameLength = audioBuffer.frameCapacity
+        for i in 0..<data.count/2 {
+            // transform two bytes into a float (-1.0 - 1.0), required by the audio buffer
+            audioBuffer.floatChannelData?.pointee[i] = Float(Int16(data[i*2+1]) << 8 | Int16(data[i*2]))/Float(INT16_MAX)
+        }
+        
+        print("\(#file) > \(#function) > Values: data: \(data)")
+        return audioBuffer
+    }
+    
+    
+    
+    //-----------------------------------------------
+    // THESE FUNCTIONS ARE NOT CURRENTLY USED
     func audioBufferToBytes(audioBuffer: AVAudioPCMBuffer) -> [UInt8] {
         let srcLeft = audioBuffer.floatChannelData![0]
         let bytesPerFrame = audioBuffer.format.streamDescription.pointee.mBytesPerFrame
@@ -163,19 +183,6 @@ class ViewController: UIViewController {
         }
         
         return audioByteArray
-    }
-    
-    // Converts Data to an audio buffer
-    func dataToAudioBuffer(data: Data) -> AVAudioPCMBuffer {
-        let audioFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 8000, channels: 1, interleaved: false)
-        let audioBuffer = AVAudioPCMBuffer(pcmFormat: audioFormat, frameCapacity: UInt32(data.count)/2)
-        audioBuffer.frameLength = audioBuffer.frameCapacity
-        for i in 0..<data.count/2 {
-            // transform two bytes into a float (-1.0 - 1.0), required by the audio buffer
-            audioBuffer.floatChannelData?.pointee[i] = Float(Int16(data[i*2+1]) << 8 | Int16(data[i*2]))/Float(INT16_MAX)
-        }
-        
-        return audioBuffer
     }
     
     func bytesToAudioBuffer(_ buf: [UInt8]) -> AVAudioPCMBuffer {
@@ -196,6 +203,24 @@ class ViewController: UIViewController {
         return audioBuffer
     }
     
+    
+    func toNSData(PCMBuffer: AVAudioPCMBuffer) -> NSData {
+        let channelCount = 1  // given PCMBuffer channel count is 1
+        let channels = UnsafeBufferPointer(start: PCMBuffer.floatChannelData, count: channelCount)
+        let ch0Data = NSData(bytes: channels[0], length:Int(PCMBuffer.frameCapacity * PCMBuffer.format.streamDescription.pointee.mBytesPerFrame))
+        return ch0Data
+    }
+    
+    func toPCMBuffer(data: NSData) -> AVAudioPCMBuffer {
+        let audioFormat = AVAudioFormat(commonFormat: AVAudioCommonFormat.pcmFormatFloat32, sampleRate: 8000, channels: 1, interleaved: false)  // given NSData audio format
+        let PCMBuffer = AVAudioPCMBuffer(pcmFormat: audioFormat, frameCapacity: UInt32(data.length) / audioFormat.streamDescription.pointee.mBytesPerFrame)
+        PCMBuffer.frameLength = PCMBuffer.frameCapacity
+        let channels = UnsafeBufferPointer(start: PCMBuffer.floatChannelData, count: Int(PCMBuffer.format.channelCount))
+        data.getBytes(UnsafeMutableRawPointer(channels[0]) , length: data.length)
+        return PCMBuffer
+    }
+    
+    //-----------------------------------------------
     
     func stopRecording() {
         if localAudioEngine.isRunning {
