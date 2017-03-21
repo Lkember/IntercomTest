@@ -23,6 +23,7 @@ class ViewController: UIViewController {
     var localInput: AVAudioInputNode?
     var localInputFormat: AVAudioFormat?
     
+    var isRecording = false
 //    var peerAudioEngine: AVAudioEngine = AVAudioEngine()
 //    var peerAudioPlayer: AVAudioPlayerNode = AVAudioPlayerNode()
 //    var peerInput: AVAudioInputNode?
@@ -48,9 +49,17 @@ class ViewController: UIViewController {
     @IBAction func startButtonIsTouched(_ sender: Any) {
         
         print("\(#file) > \(#function) > Entry")
-        recordingQueue.sync {
-            setupAVRecorder()
-            startRecordingAndPlayback()
+        
+        if (!isRecording) {
+            recordingQueue.sync {
+                setupAVRecorder()
+                startRecordingAndPlayback()
+            }
+            
+            startButton.titleLabel!.text = "Stop"
+        }
+        else {
+            startButton.titleLabel!.text = "Start"
         }
         print("\(#file) > \(#function) > Exit")
     }
@@ -63,7 +72,8 @@ class ViewController: UIViewController {
         // Setting up audio engine for local recording and sounds
         self.localInput = self.localAudioEngine.inputNode
         self.localAudioEngine.attach(self.localAudioPlayer)
-        self.localInputFormat = self.localInput?.inputFormat(forBus: 1)
+//        self.localInputFormat = self.localInput?.inputFormat(forBus: 0)
+        self.localInputFormat = AVAudioFormat.init(commonFormat: AVAudioCommonFormat.pcmFormatFloat32, sampleRate: 44100, channels: 1, interleaved: false)
         self.localAudioEngine.connect(self.localAudioPlayer, to: self.localAudioEngine.mainMixerNode, format: self.localInputFormat)
         
         print("\(#file) > \(#function) > localInputFormat = \(self.localInputFormat.debugDescription)")
@@ -83,13 +93,15 @@ class ViewController: UIViewController {
     func startRecordingAndPlayback() {
         print("\(#file) > \(#function) > Entry")
         
-        localInput?.installTap(onBus: 1, bufferSize: 2048, format: localInputFormat) {
+        localInput?.installTap(onBus: 0, bufferSize: 2048, format: localInputFormat) {
             (buffer, time) -> Void in
             
             // the audio being sent will be played locally as well
             self.localPlayerQueue.async {
                 self.localAudioPlayer.scheduleBuffer(buffer)
             }
+            
+            
             
             let data = self.audioBufferToData(audioBuffer: buffer)
             
@@ -136,6 +148,23 @@ class ViewController: UIViewController {
         return data
     }
     
+    func audioBufferToBytes(audioBuffer: AVAudioPCMBuffer) -> [UInt8] {
+        let srcLeft = audioBuffer.floatChannelData![0]
+        let bytesPerFrame = audioBuffer.format.streamDescription.pointee.mBytesPerFrame
+        let numBytes = Int(bytesPerFrame * audioBuffer.frameLength)
+        
+        // initialize bytes by 0
+        var audioByteArray = [UInt8](repeating: 0, count: numBytes)
+        
+        srcLeft.withMemoryRebound(to: UInt8.self, capacity: numBytes) { srcByteData in
+            audioByteArray.withUnsafeMutableBufferPointer {
+                $0.baseAddress!.initialize(from: srcByteData, count: numBytes)
+            }
+        }
+        
+        return audioByteArray
+    }
+    
     // Converts Data to an audio buffer
     func dataToAudioBuffer(data: Data) -> AVAudioPCMBuffer {
         let audioFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 8000, channels: 1, interleaved: false)
@@ -149,5 +178,33 @@ class ViewController: UIViewController {
         return audioBuffer
     }
     
+    func bytesToAudioBuffer(_ buf: [UInt8]) -> AVAudioPCMBuffer {
+        
+        let fmt = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 44100, channels: 1, interleaved: true)
+        let frameLength = UInt32(buf.count) / fmt.streamDescription.pointee.mBytesPerFrame
+        
+        let audioBuffer = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: frameLength)
+        audioBuffer.frameLength = frameLength
+        
+        let dstLeft = audioBuffer.floatChannelData![0]
+        
+        buf.withUnsafeBufferPointer {
+            let src = UnsafeRawPointer($0.baseAddress!).bindMemory(to: Float.self, capacity: Int(frameLength))
+            dstLeft.initialize(from: src, count: Int(frameLength))
+        }
+        
+        return audioBuffer
+    }
+    
+    
+    func stopRecording() {
+        if localAudioEngine.isRunning {
+            localAudioEngine.stop()
+        }
+        
+        if localAudioPlayer.isPlaying {
+            localAudioPlayer.stop()
+        }
+    }
 }
 
